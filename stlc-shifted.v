@@ -266,7 +266,7 @@ Definition subst u x := compose (bind u) (close x).
 Definition rename x y := compose (open y) (close x).
 Definition shift x := compose (open x) wk.
 
-Eval compute in (subst 
+Eval compute in (subst
                    (lambdae unit (appe (varen 0) (varex ("s" , 0))))
                    (("s" , 0))
                    (lambdae unit (appe (varen 0) (varex ("s" , 0))))).
@@ -296,3 +296,106 @@ Proof.
   rewrite right_identity.
   apply bind_identity.
 Qed.
+
+Inductive STLCStep : STLCE -> STLCE -> Type :=
+| stlc_beta : forall A e1 e2,
+    STLCStep (appe (lambdae A e1) e2) (bind e2 e1).
+
+Inductive STLCStepStar : STLCE -> STLCE -> Type :=
+| stlc_step : forall e1 e2, STLCStep e1 e2 -> STLCStepStar e1 e2
+| stlc_refl : forall e, STLCStepStar e e
+| stlc_trans : forall e1 e2 e3, STLCStepStar e1 e2 -> STLCStepStar e2 e3 -> STLCStepStar e1 e3
+| stlc_lambda_cong : forall A b b', STLCStepStar b b' -> STLCStepStar (lambdae A b) (lambdae A b')
+| stlc_appe_cong1 : forall e1 e1' e2, STLCStepStar e1 e1' -> STLCStepStar (appe e1 e2) (appe e1' e2)
+| stlc_appe_cong2 : forall e1 e2 e2', STLCStepStar e2 e2' -> STLCStepStar (appe e1 e2) (appe e1 e2').
+
+Inductive Dict_ref {A B : Type} : (A * B) -> list (A * B) -> Prop :=
+| cons_ref : forall a b tl, Dict_ref (a , b) ((a , b) :: tl)
+| rest_ref : forall a b c d tl, a <> c -> Dict_ref (a, b) tl -> Dict_ref (a, b) ((c, d) :: tl).
+
+Inductive STLCType : list (Var * STLCA) -> STLCE -> STLCA -> Type :=
+| T_Var : forall v A Γ, Dict_ref (v , A) Γ -> STLCType Γ (varex v) A
+| T_Lambda : forall x A e Γ B, STLCType (cons (x , A) Γ) (open x e) B -> STLCType Γ (lambdae A e) (arr A B)
+| T_App : forall e1 e2 A B Γ, STLCType Γ e1 (arr A B) -> STLCType Γ e2 A -> STLCType Γ (appe e1 e2) B.
+
+SearchAbout list.
+Lemma var_eqb_spec : forall v1 v2, (reflect (v1 = v2) (var_eqb v1 v2)).
+Proof.
+  intros.
+  case v1.
+  case v2.
+  intros.
+  simpl.
+  case: String.eqb_spec; intuition; subst; auto.
+  case: Nat.eqb_spec; intuition; subst; auto.
+    enough ((s, n0) <> (s, n)); intuition; by inversion H.
+    enough ((s0, n0) <> (s, n)); intuition; by inversion H.
+Qed.
+
+Lemma subst_pres' : forall Γ e1 A e2 B x, STLCType Γ e1 A -> STLCType (cons (x , A) Γ) e2 B -> STLCType Γ (subst e1 x e2) B.
+Proof.
+  move=>Γ e1 A e2 B x P1 P2.
+  inversion P2.
+  case (var_eqb_spec x v).
+  intro.
+  subst.
+  unfold subst.
+  unfold compose.
+  assert ((close v (varex v)) = (varen 0)).
+    simpl.
+    case v.
+    intros.
+    rewrite String.eqb_refl.
+    by rewrite Nat.eqb_refl.
+  rewrite H0.
+  simpl.
+  assert (A = B).
+    inversion P2.
+    by inversion H3.
+  by subst.
+  unfold subst.
+  unfold compose.
+  simpl.
+  case v eqn: Hv.
+  case x.
+  intros.
+  case: String.eqb_spec.
+  case: Nat.eqb_spec.
+  intros.
+  move: n1.
+  by subst.
+  intros.
+  case (n0 <? n).
+  simpl.
+  move: P2.
+  rewrite <- H1.
+Abort.
+
+(* Need the environment to reflect open/close:
+  n0 < n ->
+  STLCType (((s, n0), A) :: Γ) (varex (s, n)) B -> STLCType Γ (varex (s, Nat.pred n)) B
+
+  or
+
+  STLCType Γ e A -> x <> v -> STLCType (Γ-close x Γ) (subst e x (varex v)) A
+
+  Or:
+
+  STLCType Γ e A -> x <> v -> STLCType (Γ-close x Γ) (subst e x (varex v)) A
+
+  Probably also need:
+
+  STLCType Γ (lambda A e) (arr A B) -> STLCType ((x , A) :: (Γ-open x Γ)) (open x e) B
+  ... or something
+  *)
+Lemma preservation : forall Γ e A e', (STLCType Γ e A) -> STLCStep e e' -> STLCType Γ e' A.
+Proof.
+  move=>Γ e A e' P1 P2.
+  case P2 eqn: Hstep.
+  unfold bind.
+
+(* Fixpoint eval (e : STLCE) : STLCE :=
+  match e with
+  | (appe (lambdae _ e1) e2) => (eval (bind (eval e2) e1))
+  | _ => e
+  end. *)
