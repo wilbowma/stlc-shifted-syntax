@@ -4,16 +4,126 @@ Require Import Strings.Ascii.
 Open Scope string_scope.
 
 Require Import Bool.
-Require Import Omega.
 Require Import Nat.
 
 Require Import ssreflect.
 
-Definition Var := (string * nat)%type.
+(* I would like all of this crap to be isolated, done once and for all. *)
+(*Module shifted_names.*)
+  Require Import Omega.
+
+  Definition Var := (string * nat)%type.
+  Search "=?".
+
+  Delimit Scope var_scope with var.
+  Local Open Scope var_scope.
+
+  Local Open Scope lazy_bool_scope.
+
+  Fixpoint var_eqb (x1 x2 : Var) : bool :=
+    match x1, x2 with
+    | (s1, n1), (s2, n2) => (s1 =? s2)%string &&& (n1 =? n2)%nat
+    end.
+
+  Infix "=?" := var_eqb : var_scope.
+
+  Create HintDb VarDB.
+
+  Hint Resolve String.eqb_spec : VarDB.
+  Hint Resolve Nat.eqb_spec : VarDB.
+  Hint Resolve ReflectF : VarDB.
+  Hint Resolve ReflectT : VarDB.
+  Hint Extern 5 (eqb _ _ %nat) => case: Nat.eqb_spec : VarDB.
+
+  Lemma var_eqb_spec : forall v1 v2, (reflect (v1 = v2) (v1 =? v2)).
+  Proof.
+    intros.
+    case v1.
+    case v2.
+    intros.
+    simpl.
+    auto with VarDB.
+    case: String.eqb_spec; intuition; subst; auto; try (apply ReflectF; intuition; by inversion H).
+    case: Nat.eqb_spec; intuition; subst; auto; apply ReflectF; intuition; by inversion H.
+  Qed.
+
+  Hint Resolve var_eqb_spec : VarDB.
+
+  Definition var_dec : forall v1 v2 : Var, {v1 = v2} + {v1 <> v2}.
+  Proof.
+    intros v1 v2.
+    case: (var_eqb_spec v1 v2); auto.
+  Defined.
+
+  Ltac tvar_eqb :=
+  repeat first [ congruence
+               | progress subst
+               | apply conj
+               | match goal with
+                 | [ |- context[var_eqb ?x ?y] ] => destruct (var_eqb_spec x y)
+                 end
+               | intro ].
+
+  Hint Resolve var_eqb_spec.
+
+  Lemma var_eqb_refl x : (x =? x)%var = true.
+  Proof. tvar_eqb. Qed.
+
+  Lemma var_eqb_sym x y : (x =? y)%var = (y =? x)%var.
+  Proof. tvar_eqb. Qed.
+
+  Lemma var_eqb_eq x y : (x =? y)%var = true <-> y = x.
+  Proof. tvar_eqb. Qed.
+
+  Lemma var_eqb_neq x y : (x =? y)%var = false <-> y <> x.
+  Proof. tvar_eqb. Qed.
+
+  Lemma var_eqb_compat: Morphisms.Proper (Morphisms.respectful eq (Morphisms.respectful eq eq)) var_eqb.
+  Proof. tvar_eqb. Qed.
+
+  (*
+  (* Hm, might need a type class here. *)
+  Parameter Term : Type.
+  Parameter var_inj : Var -> Term.
+  Parameter var_prj : Term -> Var.
+  Parameter var_retraction : forall v, (var_prj (var_inj v)) = v.
+  Parameter var0 : Term.
+
+  Definition open_var (x y : Var) : Term :=
+    match x, y with
+     | (s, n), (s',n') =>
+       (if (s =? s')%string then
+          (if (n' <=? n)%nat then
+             (var_inj (s , (S n)))
+           else
+             (var_inj y))
+        else (var_inj y))
+     end.
+
+  Definition close_var (x y : Var) : Term :=
+    (if (x =? y)%var then
+       var0
+     else
+       (match x,y with
+        | (s' , n'), (s, n) => (if (s =? s')%string then
+                          (if (n' <? n)%nat then
+                             (var_inj (s , (Nat.pred n)))
+                           else
+                             (var_inj y))
+                        else
+                          (var_inj y))
+        end)).
+
+  Lemma var_shift_right_identity (x y : Var) : (close_var x (open_var x y)) = x.
+   *)
+
+(*End shifted_names.*)
+
+(*Import shifted_names.*)
 
 Inductive STLCA : Type :=
-  | unit : STLCA
-  | arr (A : STLCA) (b : STLCA) : STLCA.
+| unit : STLCA
+| arr (A : STLCA) (b : STLCA) : STLCA.
 
 Inductive STLCE : Type :=
 | varex (v : Var) : STLCE
@@ -21,23 +131,12 @@ Inductive STLCE : Type :=
 | lambdae (A : STLCA) (body : STLCE) : STLCE
 | appe (e1 : STLCE) (e2 : STLCE) : STLCE.
 
-Fixpoint var_eqb (x1 x2 : Var) : bool :=
-  match x1 with
-  | (s1, n1) => match x2 with
-                | (s2, n2) => (if (s1 =? s2)%string then
-                                 if (n1 =? n2)%nat then
-                                   true
-                                 else false
-                              else false)
-                end
-  end.
-
 Fixpoint open (x : Var) (e : STLCE) : STLCE :=
   match e with
   | varen 0 => varex x
   | varen (S n) => varen n
   | varex (s , n) => (match x with
-                      | (s' , n') => (if (s =? s') then
+                      | (s' , n') => (if (s =? s')%string then
                                         (if (n' <=? n) then
                                            (varex (s , (S n)))
                                          else
@@ -55,7 +154,7 @@ Fixpoint close (x : Var) (e : STLCE) : STLCE :=
                         varen 0
                       else
                         (match x with
-                         | (s' , n') => (if (s =? s') then
+                         | (s' , n') => (if (s =? s')%string then
                                            (if (n' <? n)%nat then
                                               (varex (s , (Nat.pred n)))
                                             else
@@ -309,6 +408,15 @@ Inductive STLCStepStar : STLCE -> STLCE -> Type :=
 | stlc_appe_cong1 : forall e1 e1' e2, STLCStepStar e1 e1' -> STLCStepStar (appe e1 e2) (appe e1' e2)
 | stlc_appe_cong2 : forall e1 e2 e2', STLCStepStar e2 e2' -> STLCStepStar (appe e1 e2) (appe e1 e2').
 
+(* Context should be a set; the names themselves implement shadowing.
+   The process of adding a name to the set requires mapping open over the set.
+   Removing a name from a set must map close over the set.
+
+   Really, part of open/close should be abstracted out and *that* should be
+   mapped over the set, and used in the definitions of open and close.
+
+   This possibly could be done *once and forall*.
+ *)
 Inductive Dict_ref {A B : Type} : (A * B) -> list (A * B) -> Prop :=
 | cons_ref : forall a b tl, Dict_ref (a , b) ((a , b) :: tl)
 | rest_ref : forall a b c d tl, a <> c -> Dict_ref (a, b) tl -> Dict_ref (a, b) ((c, d) :: tl).
@@ -319,18 +427,6 @@ Inductive STLCType : list (Var * STLCA) -> STLCE -> STLCA -> Type :=
 | T_App : forall e1 e2 A B Γ, STLCType Γ e1 (arr A B) -> STLCType Γ e2 A -> STLCType Γ (appe e1 e2) B.
 
 SearchAbout list.
-Lemma var_eqb_spec : forall v1 v2, (reflect (v1 = v2) (var_eqb v1 v2)).
-Proof.
-  intros.
-  case v1.
-  case v2.
-  intros.
-  simpl.
-  case: String.eqb_spec; intuition; subst; auto.
-  case: Nat.eqb_spec; intuition; subst; auto.
-    enough ((s, n0) <> (s, n)); intuition; by inversion H.
-    enough ((s0, n0) <> (s, n)); intuition; by inversion H.
-Qed.
 
 Lemma subst_pres' : forall Γ e1 A e2 B x, STLCType Γ e1 A -> STLCType (cons (x , A) Γ) e2 B -> STLCType Γ (subst e1 x e2) B.
 Proof.
